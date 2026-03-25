@@ -1,57 +1,46 @@
-from datetime import datetime, timezone, timedelta
+import os
+import time
 import random
+import logging
+from datetime import datetime, timezone
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 try:
     import yfinance as yf
-    YF_OK = True
+    YFINANCE_OK = True
 except Exception:
-    YF_OK = False
-
-def _fmt(v):
-    try:
-        return float(v)
-    except Exception:
-        return None
-
-def get_intraday_summary(symbol):
-    try:
-        if YF_OK:
-            now = datetime.now(timezone.utc)
-            start = now - timedelta(minutes=30)
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(interval="1m", start=start.isoformat(), end=now.isoformat(), actions=False)
-            if df is None or df.empty:
-                raise Exception("empty df")
-            closes = df["Close"].dropna().astype(float)
-            if closes.empty:
-                raise Exception("no closes")
-            last = float(closes.iloc[-1])
-            first = float(closes.iloc[0])
-            mean = float(closes.mean())
-            std = float(closes.std()) if len(closes) > 1 else 0.0
-            pct = (last - first) / first * 100 if first != 0 else 0.0
-            return f"last:{last:.2f} pct:{pct:.2f} mean:{mean:.2f} vol:{std:.4f} samples:{len(closes)}"
-        else:
-            price = round(random.uniform(80, 350), 2)
-            return f"fallback last:{price:.2f} pct:0.00 mean:{price:.2f} vol:0.00 samples:1"
-    except Exception as e:
-        try:
-            price = round(random.uniform(80, 350), 2)
-            return f"error fallback last:{price:.2f} note:{str(e)}"
-        except Exception:
-            return "no data"
-
-def get_latest_price(symbol):
-    try:
-        if YF_OK:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period="2m", interval="1m", actions=False)
-            if df is None or df.empty:
-                raise Exception("empty")
-            closes = df["Close"].dropna().astype(float)
-            if closes.empty:
-                raise Exception("no closes")
-            return float(closes.iloc[-1])
-        else:
-            return round(random.uniform(80, 350), 2)
-    except Exception:
-        return round(random.uniform(80, 350), 2)
+    YFINANCE_OK = False
+class DataProcessor:
+    def __init__(self):
+        self.cache = {}
+        self.cache_ttl = int(os.getenv("DATA_CACHE_TTL", "5"))
+    def _now(self):
+        return int(time.time())
+    def _from_cache(self, symbol):
+        ent = self.cache.get(symbol)
+        if not ent: return None
+        if self._now() - ent.get("ts", 0) > self.cache_ttl: return None
+        return ent.get("data")
+    def fetch_latest(self, symbol):
+        cached = self._from_cache(symbol)
+        if cached: return cached
+        if YFINANCE_OK:
+            try:
+                t = yf.Ticker(symbol)
+                df = t.history(period="1d", interval="1m")
+                if df is not None and not df.empty:
+                    last_row = df.iloc[-1]
+                    last = float(last_row["Close"])
+                    prev = float(df["Close"].iloc[-2]) if len(df) > 1 else last
+                    data = {
+                        "symbol": symbol, "last": last, 
+                        "vol": int(last_row.get("Volume", 0)),
+                        "pc": round((last - prev) / prev * 100, 3) if prev != 0 else 0.0,
+                        "ts": datetime.now(timezone.utc).isoformat()
+                    }
+                    self.cache[symbol] = {"ts": self._now(), "data": data}
+                    return data
+            except Exception as e:
+                logging.info("yfinance failed for %s: %s", symbol, e)
+        return {"symbol": symbol, "last": 100.0, "vol": 0, "pc": 0.0}
+    def get_stats(self, symbol):
+        return self.fetch_latest(symbol)
