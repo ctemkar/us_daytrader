@@ -25,7 +25,8 @@ async def main_loop():
                     stats = data_proc.get_stats(symbol)
                     if not stats or stats.get("last", 0) <= 0:
                         continue
-                    summary = f"Price:{stats['last']} Change:{stats.get('pc',0)} Vol:{stats.get('vol',0)}"
+                    price = float(stats["last"])
+                    summary = f"Price:{price} Change:{stats.get('pc',0)} Vol:{stats.get('vol',0)}"
                     consensus = await llm.get_consensus(symbol, summary)
                     decision = consensus.get("decision", "HOLD")
                     conf = consensus.get("confidence", 0.0)
@@ -33,14 +34,11 @@ async def main_loop():
                     votes = consensus.get("votes", [])
                     logging.info("RESULT %s -> %s (conf: %.3f) votes: %s details: %s", symbol, decision, conf, votes, providers)
                     if decision in ["BUY", "SELL"] and conf >= 0.7:
-                        if risk.validate(symbol, decision, stats["last"]):
-                            qty = int(INVESTMENT_CAP // stats["last"])
-                            if qty > 0:
-                                res = executor.place_order(symbol, decision, qty)
-                                logging.info("Order Result: %s", res)
+                        if risk.validate(symbol, decision, price):
+                            res = executor.place_order(symbol, decision, price)
+                            logging.info("Order Result: %s", res)
                 except Exception as e:
                     logging.error("Loop error on %s: %s", symbol, e)
-            logging.info("Sweep completed. Sleeping %s seconds", TICKER_INTERVAL)
             await asyncio.sleep(TICKER_INTERVAL)
     finally:
         await llm.close()
