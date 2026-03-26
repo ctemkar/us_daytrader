@@ -1,50 +1,111 @@
-import os
 import asyncio
 import logging
-from config.settings import SYMBOLS, TICKER_INTERVAL, INVESTMENT_CAP
+from datetime import datetime, time
+import pytz
+import alpaca_trade_api as tradeapi
+from config.settings import (
+    SYMBOLS, TICKER_INTERVAL, INVESTMENT_CAP,
+    ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL,
+    TRADING_END_EST, TAKE_PROFIT_PCT, STOP_LOSS_PCT
+)
 from data.processor import DataProcessor
-from signals.engine import SignalEngine
 from llm.client import LLMClient
-from execution.orders import OrderManager
 from risk.guard import RiskGuard
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+EST = pytz.timezone('US/Eastern')
 
-async def main_loop():
-    data_proc = DataProcessor()
-    sig_engine = SignalEngine()
+async def run_engine():
+    api = tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
+    processor = DataProcessor()
     llm = LLMClient()
-    executor = OrderManager()
     risk = RiskGuard()
-    logging.info("Starting Alpaca Day Trader - Cap: $%s", INVESTMENT_CAP)
-    try:
-        while True:
-            logging.info("Starting sweep for %s symbols", len(SYMBOLS))
-            for symbol in SYMBOLS:
+
+    logging.info(f"=== ENGINE START: LIVE MODE ({ALPACA_BASE_URL}) ===")
+
+    while True:
+        now_est = datetime.now(EST).time()
+        cutoff = time.fromisoformat(TRADING_END_EST)
+
+        if now_est >= cutoff:
+            logging.info("Market closed. Closing all positions.")
+            for p in api.list_positions():
                 try:
-                    stats = data_proc.get_stats(symbol)
-                    if not stats or stats.get("last", 0) <= 0:
-                        continue
-                    price = float(stats["last"])
-                    summary = f"Price:{price} Change:{stats.get('pc',0)} Vol:{stats.get('vol',0)}"
-                    consensus = await llm.get_consensus(symbol, summary)
-                    decision = consensus.get("decision", "HOLD")
-                    conf = consensus.get("confidence", 0.0)
-                    providers = consensus.get("providers", [])
-                    votes = consensus.get("votes", [])
-                    logging.info("RESULT %s -> %s (conf: %.3f) votes: %s details: %s", symbol, decision, conf, votes, providers)
-                    if decision in ["BUY", "SELL"] and conf >= 0.7:
-                        if risk.validate(symbol, decision, price):
-                            res = executor.place_order(symbol, decision, price)
-                            logging.info("Order Result: %s", res)
+                    api.submit_order(
+                        symbol=p.symbol,
+                        qty=abs(float(p.qty)),
+                        side="sell" if float(p.qty) > 0 else "buy",
+                        type="market",
+                        time_in_force="day"
+                    )
                 except Exception as e:
-                    logging.error("Loop error on %s: %s", symbol, e)
-            await asyncio.sleep(TICKER_INTERVAL)
-    finally:
-        await llm.close()
+                    logging.error(f"Error closing {p.symbol}: {e}")
+            await asyncio.sleep(3600)
+            continue
+
+        positions = {p.symbol: float(p.qty) for p in api.list_positions()}
+        account = api.get_account()
+        buying_power = float(account.buying_power)
+
+        for symbol in SYMBOLS:
+            try:
+                logging.info(f"--- {symbol} ---")
+                bars = api.get_bars(symbol, TICKER_INTERVAL, limit=50).df
+                if bars.empty:
+                    logging.info(f"No data for {symbol}, skipping.")
+                    continue
+
+                bars.columns = [c.lower() for c in bars.columns]
+                df = processor.calculate_indicators(bars)
+                summary = processor.get_summary(df)
+
+                decision = await llm.get_consensus(symbol, summary)
+                logging.info(f"Decision: {decision['decision']} (conf: {decision['confidence']})")
+
+                qty = positions.get(symbol, 0.0)
+                last_price = df['close'].iloc[-1]
+
+                if qty != 0:
+                    pos_detail = api.get_position(symbol)
+                    avg_price = float(pos_detail.avg_entry_price)
+                    gain = (last_price - avg_price) / avg_price if qty > 0 else (avg_price - last_price) / avg_price
+                    if gain >= TAKE_PROFIT_PCT or gain <= -STOP_LOSS_PCT:
+                        logging.info(f"EXIT {symbol} at {gain:.2%}")
+                        api.submit_order(
+                            symbol=symbol,
+                            qty=abs(qty),
+                            side="sell" if qty > 0 else "buy",
+                            type="market",
+                            time_in_force="day"
+                        )
+                elif risk.can_enter_new_position(len(positions)):
+                    if decision['decision'] in ["BUY", "SELL"]:
+                        side = "buy" if decision['decision'] == "BUY" else "sell"
+                        max_qty_by_cap = INVESTMENT_CAP / last_price
+                        max_qty_by_power = buying_power / last_price if side == "buy" else max_qty_by_cap  # Simplified for shorts
+                        order_qty = round(min(max_qty_by_cap, max_qty_by_power), 4)
+
+                        if order_qty >= 0.01:
+                            logging.info(f"LIVE EXECUTE: {side.upper()} {symbol} qty {order_qty}")
+                            api.submit_order(
+                                symbol=symbol,
+                                qty=order_qty,
+                                side=side,
+                                type="market",
+                                time_in_force="day"
+                            )
+                        else:
+                            logging.info(f"Not enough buying power to {side} {symbol}")
+                else:
+                    logging.info(f"Skipping {symbol}: Active position {qty}")
+
+            except Exception as e:
+                logging.error(f"Error {symbol}: {e}")
+
+            await asyncio.sleep(0.5)
+
+        logging.info("Sweep complete. Waiting 60s...")
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main_loop())
-    except KeyboardInterrupt:
-        logging.info("Stopped")
+    asyncio.run(run_engine())

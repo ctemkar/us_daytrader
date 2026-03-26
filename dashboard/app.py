@@ -1,64 +1,55 @@
-from dotenv import load_dotenv
-load_dotenv()
-import streamlit as st
-import json
+import sys
 import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/..")
+
+import streamlit as st
+import pandas as pd
 import time
+from data.processor import DataProcessor
 
-STATE_FILE = os.getenv('ENGINE_STATE_FILE', 'engine_state.json')
-REFRESH_SECONDS = int(os.getenv('DASH_REFRESH_SEC', '3'))
+st.set_page_config(page_title="AI Day Trader", layout="wide")
 
-st.set_page_config(page_title="Daytrader Dashboard", layout="wide")
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stApp { background-color: #0e1117; color: #ffffff; }
+    </style>
+    """, unsafe_allow_html=True)
 
-st.markdown('<meta http-equiv="refresh" content="{}">'.format(REFRESH_SECONDS), unsafe_allow_html=True)
+st.title("🚀 AI Day Trader - Live Dashboard")
 
-st.title("Daytrader Live Dashboard")
+processor = DataProcessor()
+symbols = ["NVDA", "MSFT", "TSLA", "AAPL", "AMD", "META", "SPY", "QQQ", "GOOGL", "AMZN"]
 
-col1, col2 = st.columns([3,1])
+placeholder = st.empty()
 
-def load_state():
-    if not os.path.exists(STATE_FILE):
-        return {}
-    try:
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+while True:
+    with placeholder.container():
+        cols = st.columns(4)
+        for i, symbol in enumerate(symbols[:4]):
+            stats = processor.get_stats(symbol)
+            price = stats.get("last", "N/A")
+            pc = stats.get("pc", 0.0)
+            delta_str = f"{pc:+.2f}%"
+            cols[i].metric(symbol, f"${price:.2f}", delta=delta_str)
 
-state = load_state()
-
-if not state or "symbols" not in state:
-    st.warning("No engine state found yet. Run the trading engine first")
-    if st.button("Refresh now"):
-        st.experimental_rerun()
-    st.stop()
-
-with col1:
-    st.header("Symbols")
-    rows = []
-    for sym, info in state.get("symbols", {}).items():
-        rows.append({
-            "symbol": sym,
-            "decision": info.get("decision"),
-            "confidence": info.get("confidence"),
-            "price": info.get("price"),
-            "time_utc": info.get("time_utc")
-        })
-    st.dataframe(rows)
-
-with col2:
-    st.header("Status")
-    st.write("Last update")
-    st.write(state.get("last_update", "n/a"))
-    if st.button("Refresh now"):
-        st.experimental_rerun()
-
-st.header("Detailed breakdown per symbol")
-for sym, info in state.get("symbols", {}).items():
-    with st.expander(sym + "  " + str(info.get("decision")) + "  conf " + str(info.get("confidence"))):
-        st.write("price", info.get("price"))
-        st.write("time", info.get("time_utc"))
-        st.subheader("LLM breakdown")
-        for b in info.get("breakdown", []):
-            st.write(b)
-        st.markdown("---")
+        st.divider()
+        
+        data = []
+        for symbol in symbols:
+            stats = processor.get_stats(symbol)
+            data.append({
+                "Symbol": symbol,
+                "Price": f"${stats.get('last', 'N/A'):.2f}",
+                "Change %": f"{stats.get('pc', 0.0):+.2f}%",
+                "Volume": stats.get("vol", 0),
+                "Timestamp": stats.get("ts", "")
+            })
+        
+        df = pd.DataFrame(data)
+        st.table(df)
+        
+        st.caption(f"Last Update: {time.strftime('%H:%M:%S')} ICT")
+    
+    time.sleep(10)

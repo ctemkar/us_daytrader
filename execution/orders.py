@@ -1,30 +1,47 @@
+import os
 import logging
-from execution.alpaca_client import AlpacaClient
-from config import settings
+from alpaca_trade_api.rest import REST
+from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+load_dotenv(os.path.join(os.getcwd(), '.env'))
 
 class OrderManager:
     def __init__(self):
-        self.client = AlpacaClient()
-
-    def place_order(self, symbol, decision, price):
-        allocation = float(settings.INVESTMENT_CAP) / float(settings.MAX_OPEN_POSITIONS)
-        qty = int(allocation // price)
+        key_id = os.getenv("ALPACA_API_KEY")
+        secret_key = os.getenv("ALPACA_API_SECRET")
         
-        if qty < 1:
-            logging.info("Skipping %s: qty 0 for price %s (Alloc: $%s)", symbol, price, allocation)
-            return {"status": "skipped"}
+        if not key_id or not secret_key:
+            raise ValueError("Missing Alpaca Credentials in .env")
 
-        side = "buy" if decision == "BUY" else "sell"
-        
+        self.client = REST(
+            key_id=key_id,
+            secret_key=secret_key,
+            base_url="https://paper-api.alpaca.markets"
+        )
+        self.allocation_per_trade = 25.0
+
+    def place_order(self, symbol, side, price):
         try:
-            res = self.client.create_order(symbol, qty, side)
-            logging.info("Alpaca Order Result: %s", res)
-            return res
-        except Exception as e:
-            logging.error("Alpaca Order Failed: %s", e)
-            return {"status": "error", "message": str(e)}
+            order_side = "buy" if side.upper() == "BUY" else "sell"
+            
+            if order_side == "buy":
+                qty = round(self.allocation_per_trade / price, 4)
+            else:
+                qty = int(self.allocation_per_trade // price)
 
-    def get_position_qty(self, symbol):
-        return self.client.get_position(symbol)
+            if qty <= 0:
+                logging.info("Skipping %s: qty 0 for price %s (Alloc: $%s)", symbol, price, self.allocation_per_trade)
+                return {"status": "skipped", "reason": "qty_zero"}
+
+            order = self.client.submit_order(
+                symbol=symbol,
+                qty=qty,
+                side=order_side,
+                type="market",
+                time_in_force="day"
+            )
+            return {"status": "success", "order_id": order.id, "qty": qty}
+
+        except Exception as e:
+            logging.error("Alpaca Order Error for %s: %s", symbol, e)
+            return {"status": "error", "message": str(e)}
