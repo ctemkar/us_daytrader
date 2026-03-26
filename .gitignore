@@ -1,69 +1,50 @@
-# Virtual Environments
-venv/
-env/
-ENV/
-.venv
-
-# Python
+# Python bytecode and caches
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-*.pyc
-.pytest_cache/
-.coverage
-htmlcov/
 
-# IDE
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Local environment/secrets
+.env
+.env.*
+!.env.example
+
+# Tooling caches and test artifacts
+.pytest_cache/
+.tox/
+.mypy_cache/
+.ruff_cache/
+.cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Build/package artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Logs and runtime output
+logs/
+*.log
+
+# Local state/runtime files
+engine_state.json
+
+# Editor and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-.DS_Store
-.sublime-project
-.sublime-workspace
-
-# Environment Variables
-.env
-.env.local
-.env.*.local
-
-# Logs
-logs/
-*.log
-trader.log
-
-# State/Cache Files
-engine_state.json
-*.cache
-.cache/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Testing
-.tox/
-.pytest_cache/
-
-# Editor temp files
 *.tmp
 *.bak
+*.backup
+.DS_Store
+Thumbs.db
