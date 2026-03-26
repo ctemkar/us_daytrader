@@ -2,29 +2,38 @@ import pandas as pd
 import numpy as np
 
 class DataProcessor:
-    def calculate_indicators(self, df):
-        if len(df) < 20: return df
+    def __init__(self):
+        pass
+
+    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
-        
+        # Simple Moving Average 20
+        df['sma20'] = df['close'].rolling(window=20).mean()
+        # Exponential Moving Average 50
+        df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
+        # Relative Strength Index (RSI) 14
         delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df['rsi'] = 100 - (100 / (1 + rs))
-        
-        exp1 = df['close'].ewm(span=12, adjust=False).mean()
-        exp2 = df['close'].ewm(span=26, adjust=False).mean()
-        df['macd'] = exp1 - exp2
-        df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window=14).mean()
+        avg_loss = loss.rolling(window=14).mean()
+        rs = avg_gain / avg_loss
+        df['rsi14'] = 100 - (100 / (1 + rs))
+        # Bollinger Bands 20, 2 std
+        df['bb_mid'] = df['close'].rolling(window=20).mean()
+        df['bb_std'] = df['close'].rolling(window=20).std()
+        df['bb_upper'] = df['bb_mid'] + 2 * df['bb_std']
+        df['bb_lower'] = df['bb_mid'] - 2 * df['bb_std']
         return df
 
-    def get_summary(self, df):
-        if df.empty: return "No data"
-        last = df.iloc[-1]
-        prev = df.iloc[-2] if len(df) > 1 else last
-        change = ((last['close'] - prev['close']) / prev['close']) * 100
-        
-        rsi_val = f"{last['rsi']:.2f}" if 'rsi' in last and not np.isnan(last['rsi']) else "N/A"
-        macd_val = f"{last['macd']:.2f}" if 'macd' in last and not np.isnan(last['macd']) else "N/A"
-        
-        return f"Price: {last['close']:.2f}, Change: {change:.3f}%, RSI: {rsi_val}, MACD: {macd_val}"
+    def get_summary(self, df: pd.DataFrame) -> str:
+        latest = df.iloc[-1]
+        summary = (
+            f"SMA20: {latest['sma20']:.2f}, "
+            f"EMA50: {latest['ema50']:.2f}, "
+            f"RSI14: {latest['rsi14']:.2f}, "
+            f"BB Upper: {latest['bb_upper']:.2f}, "
+            f"BB Lower: {latest['bb_lower']:.2f}, "
+            f"Close: {latest['close']:.2f}"
+        )
+        return summary
